@@ -272,11 +272,13 @@
             const salvo = localStorage.getItem('almoxarifado');
             if (salvo) {
                 db = JSON.parse(salvo);
+                if (!db.movimentacoes) db.movimentacoes = [];
             } else {
                 db.itens = [
                     { id: 1, categoria: "Teclado", marca: "Logitech", descricao: "Teclado Mecânico K380", patrimonio: "PAT-2026001", quantidade: 12, status: "Em estoque" },
                     { id: 2, categoria: "Monitor", marca: "Dell", descricao: "Monitor 24\"", patrimonio: "PAT-2026002", quantidade: 5, status: "Em estoque" }
                 ];
+                db.movimentacoes = [];
                 salvarDB();
             }
         }
@@ -318,7 +320,7 @@
                     
                     <label class="btn-import">
                         📥 Importar CSV
-                        <input type="file" id="arquivo-csv" accept=".csv" style="display: none;" onchange="processarCSV(event)">
+                        <input type="file" id="inputCSV" accept=".csv" style="display: none;">
                     </label>
                 </div>
                 <div class="card table-container">
@@ -339,65 +341,78 @@
                 </div>`;
             container.innerHTML = html;
             atualizarTabelaEstoque();
+            configurarLeitorCSV();
         }
 
-        function processarCSV(event) {
-            const arquivo = event.target.files[0];
-            if (!arquivo) return;
+        function processarCSV(conteudoCSV) {
+            if (!conteudoCSV || typeof conteudoCSV !== 'string') {
+                alert("Erro: Conteúdo do arquivo CSV inválido ou vazio.");
+                return;
+            }
 
-            const leitor = new FileReader();
-            leitor.onload = function(e) {
-                const texto = e.target.result;
-                const linhas = texto.split(/\r?\n/);
-                let itensImportados = 0;
+            const linhas = conteudoCSV.split(/\r?\n/).filter(linha => linha.trim() !== '');
 
-                const primeiraLinha = lines[0] || "";
-                const separador = primeiraLinha.includes(';') ? ';' : ',';
+            if (linhas.length <= 1) {
+                alert("O arquivo CSV está vazio ou contém apenas a linha de cabeçalho.");
+                return;
+            }
 
-                linhas.forEach((linha, index) => {
-                    if (!linha.trim() || linha.toLowerCase().includes('categoria') || linha.toLowerCase().includes('patrimônio')) {
-                        return;
-                    }
+            const separador = linhas[0].includes(';') ? ';' : ',';
+            let itensImportados = 0;
 
-                    const colunas = linha.split(separador).map(celula => celula.replace(/^["']|["']$/g, '').trim());
+            for (let i = 1; i < linhas.length; i++) {
+                const colunas = linhas[i]
+                    .split(separador)
+                    .map(col => col.replace(/^"(.*)"$/, '$1').trim());
 
-                    if (colunas.length >= 5) {
-                        const categoria = colunas[0];
-                        const descricao = colunas[1];
-                        const marca = colunas[2];
-                        const patrimonio = colunas[3];
-                        const quantidade = parseInt(colunas[4]) || 0;
-                        const status = quantidade > 0 ? "Em estoque" : "Esgotado";
+                if (colunas.length >= 5) {
+                    const quantidade = parseInt(colunas[4], 10) || 0;
+                    const patrimonio = colunas[3] || 'N/A';
 
-                        const jaExiste = db.itens.some(item => item.patrimonio === patrimonio && patrimonio !== "");
-                        
-                        if (!jaExiste) {
-                            db.itens.push({
-                                id: Date.now() + index,
-                                categoria,
-                                descricao,
-                                marca,
-                                patrimonio,
-                                quantidade,
-                                status
-                            });
-                            itensImportados++;
-                        }
-                    }
-                });
+                    const novoItem = {
+                        id: Date.now() + i,
+                        categoria: colunas[0] || 'Geral',
+                        descricao: colunas[1] || 'Sem descrição',
+                        marca: colunas[2] || '-',
+                        patrimonio: patrimonio,
+                        quantidade: quantidade,
+                        status: quantidade > 0 ? "Em estoque" : "Esgotado"
+                    };
 
-                if (itensImportados > 0) {
-                    salvarDB();
-                    registrarMovimentacao("Importação", `${itensImportados} itens adicionados via planilha.`);
-                    atualizarTabelaEstoque();
-                    alert(`✅ Sucesso! ${itensImportados} novos itens foram importados para o estoque.`);
-                } else {
-                    alert("⚠️ Nenhum item novo foi importado. Verifique se o arquivo está no formato correto ou se os itens já existem.");
+                    db.itens.push(novoItem);
+                    itensImportados++;
                 }
-            };
+            }
 
-            leitor.readAsText(arquivo, 'UTF-8');
-            event.target.value = '';
+            if (itensImportados > 0) {
+                salvarDB();
+                registrarMovimentacao("Importação", `${itensImportados} itens importados via arquivo CSV.`);
+                alert(`✅ Sucesso! ${itensImportados} itens foram importados com êxito.`);
+                atualizarTabelaEstoque();
+            } else {
+                alert("⚠️ Nenhum item válido pôde ser extraído do arquivo CSV.");
+            }
+        }
+
+        function configurarLeitorCSV() {
+            const inputCSV = document.getElementById('inputCSV');
+            if (inputCSV) {
+                inputCSV.addEventListener('change', function(event) {
+                    const arquivo = event.target.files[0];
+                    if (!arquivo) return;
+
+                    const leitor = new FileReader();
+                    leitor.readAsText(arquivo, 'UTF-8');
+                    
+                    leitor.onload = function(e) {
+                        processarCSV(e.target.result);
+                    };
+
+                    leitor.onerror = function() {
+                        alert("Erro ao tentar ler o arquivo selecionado.");
+                    };
+                });
+            }
         }
 
         function atualizarTabelaEstoque(filtro = '') {
@@ -441,7 +456,7 @@
                         <td>${item.marca}</td>
                         <td>${item.patrimonio}</td>
                         <td style="font-weight:600;color:#84836d;">${item.quantidade}</td>
-                        <td><span style="background:#eef0eb;color:#84836d;padding:6px 12px;border-radius9999px;font-size:14px;font-weight:600;border: 1px solid #d6dad0;">${item.status}</span></td>
+                        <td><span style="background:#eef0eb;color:#84836d;padding:6px 12px;border-radius:9999px;font-size:14px;font-weight:600;border: 1px solid #d6dad0;">${item.status}</span></td>
                         <td>
                             <button onclick="ativarEdicao(${item.id})" class="btn-acao btn-editar" title="Editar Item">✏️</button>
                             <button onclick="excluirItem(${item.id})" class="btn-acao btn-excluir" title="Excluir Item">🗑️</button>
@@ -454,7 +469,7 @@
         }
 
         // Funções de Controle da Edição
-        function activarEdicao(id) {
+        function ativarEdicao(id) {
             idItemEmEdicao = id;
             const termoBusca = document.getElementById('busca-estoque')?.value || '';
             atualizarTabelaEstoque(termoBusca);
@@ -478,13 +493,10 @@
                 return;
             }
 
-            // Localiza o item no array do banco
             const item = db.itens.find(i => i.id === id);
             if (item) {
-                // Registra a alteração nas movimentações para auditoria
                 registrarMovimentacao("Edição", `Item "${item.descricao}" modificado manualmente.`);
                 
-                // Aplica os novos valores
                 item.categoria = novaCat;
                 item.descricao = novaDesc;
                 item.marca = novaMarca;
@@ -493,7 +505,7 @@
                 item.status = novaQtd > 0 ? "Em estoque" : "Esgotado";
 
                 salvarDB();
-                idItemEmEdicao = null; // Sai do modo de edição
+                idItemEmEdicao = null;
                 atualizarTabelaEstoque(document.getElementById('busca-estoque')?.value || '');
                 alert("✅ Item atualizado com sucesso!");
             }
@@ -543,7 +555,7 @@
                         <thead><tr><th>Data</th><th>Tipo</th><th>Descrição</th></tr></thead>
                         <tbody>`;
             
-            if (db.movimentacoes.length === 0) {
+            if (!db.movimentacoes || db.movimentacoes.length === 0) {
                 html += `<tr><td colspan="3" style="text-align:center;padding:30px;color:#8c8a79;">Nenhuma movimentação registrada ainda.</td></tr>`;
             } else {
                 db.movimentacoes.slice(0,30).forEach(m => {
@@ -559,7 +571,7 @@
         }
 
         function exportarMovimentacoesCSV() {
-            if (db.movimentacoes.length === 0) {
+            if (!db.movimentacoes || db.movimentacoes.length === 0) {
                 alert("⚠️ Não há movimentações para exportar.");
                 return;
             }
